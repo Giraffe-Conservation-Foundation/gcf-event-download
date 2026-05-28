@@ -170,20 +170,6 @@ workflow:
           columns: []
           auto_detect: true
 
-      # GCF CUSTOM TASK — repeat-group flattening
-      # See custom_tasks/flatten_repeat_groups.py for the implementation.
-      # Uncomment once packaged in ecoscope-workflows-ext-gcf:
-      #
-      # - name: Flatten GCF Repeat Groups
-      #   id: flatten_repeat_groups
-      #   task: flatten_gcf_repeat_groups
-      #   partial:
-      #     df: ${{ workflow.convert_event_details_timezone.return }}
-      #
-      # Until then: events without repeat groups export correctly.
-      # Repeat-group events will have one row per event instead of one
-      # row per repeat-group entry.
-
       - name: Filter Event Relocations
         id: filter_events
         task: apply_reloc_coord_filter
