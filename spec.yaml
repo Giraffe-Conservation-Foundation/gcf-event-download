@@ -11,18 +11,23 @@ rjsf-overrides:
   properties:
     get_event_data.properties.event_types.description: >-
       Specify the event type(s) to download (optional). Enter the VALUE (not
-      display name) for each event type — one per field (e.g.
-      "giraffe_survey_encounter_nam"). Values can be found in your EarthRanger
-      Admin site under Activity → Event Types. Leave empty to include all event
-      types.
+      display name) for each event type (e.g. "giraffe_survey_encounter_nam").
+      Values can be found in EarthRanger Admin under Activity > Event Types.
+      Leave empty to include all event types.
     get_event_data.properties.event_types.title: "Event Types"
+    get_event_data.properties.force_point_geometry.title: "Reduce Polygon Events to Points"
+    get_event_data.properties.force_point_geometry.default: false
+    get_event_data.properties.force_point_geometry.ecoscope:advanced: false
+
+    Generate Maps.properties.skip_map_generation.properties.skip.default: true
+    Download Attachments.properties.skip_attachment_download.properties.skip.default: true
 
     persist_events.properties.filename_prefix.default: "events"
     persist_events.properties.filetypes.default: ["csv"]
     persist_events.properties.filetypes.items.enum: ["csv", "parquet"]
     persist_events.properties.filetypes.description: >-
-      Output file format(s). CSV opens directly in Excel. Parquet preserves
-      geometry natively and is recommended for spatial analysis.
+      Output file format. CSV opens in Excel. Parquet preserves geometry and
+      is recommended for spatial analysis.
 
     Process Events.properties.process_columns.properties.drop_columns.default:
       - level_8
@@ -51,30 +56,12 @@ rjsf-overrides:
       - image_url
       - external_source
     Process Events.properties.process_columns.properties.drop_columns.description: >-
-      Columns to remove from the final export. The defaults match the GCF
-      Twiga Tools Event Download page. Adjust as needed for your use case.
-
-    Process Events.properties.groupers.properties.groupers.items.anyOf:
-      - {"$ref": "#/$defs/ValueGrouper"}
-      - {"$ref": "#/$defs/TemporalGrouper"}
-
-  $defs:
-    ValueGrouper:
-      title: "Category"
-      type: "object"
-      properties:
-        index_name:
-          title: "Index Name"
-          type: "string"
-          oneOf:
-            - const: "event_category"
-              title: "Event Type Category"
-            - const: "event_type"
-              title: "Event Type"
-            - const: "reported_by_name"
-              title: "Reported By Name"
+      Columns to remove from the export. Defaults match the GCF Twiga Tools
+      Event Download page. Adjust as needed.
 
   uiSchema:
+    Download Attachments.download_attachments.ui:options.label: false
+    Download Attachments.download_attachments.attachments_subdir.items.ui:options.label: false
     Process Events.filter_events.filter_point_coords.items.ui:options.label: false
 
 task-instance-defaults:
@@ -122,8 +109,7 @@ workflow:
     type: task-group
     description: >-
       Flatten and clean event data: timezone conversion, event detail
-      normalisation, GCF repeat-group handling, column filtering, and optional
-      SQL transformation.
+      normalisation, column filtering, and optional SQL transformation.
     tasks:
 
       - name: Convert to timezone
@@ -173,7 +159,7 @@ workflow:
           skip_if_not_exists: true
           sort_columns: false
 
-      - name: Remove Column Prefix from Event Details
+      - name: Remove Column Prefix Event Details
         id: drop_event_details_prefix
         task: drop_column_prefix
         partial:
@@ -190,25 +176,20 @@ workflow:
           columns: []
           auto_detect: true
 
-      # GCF CUSTOM TASK — repeat-group flattening
-      # See custom_tasks/flatten_repeat_groups.py for the implementation.
-      # Uncomment once packaged in ecoscope-workflows-ext-gcf:
-      #
-      # - name: Flatten GCF Repeat Groups
-      #   id: flatten_repeat_groups
-      #   task: flatten_gcf_repeat_groups
-      #   partial:
-      #     df: ${{ workflow.convert_event_details_timezone.return }}
-      #
-      # Until then: events without repeat groups export correctly.
-      # Repeat-group events will have one row per event instead of one
-      # row per repeat-group entry.
+      - name: Events Colormap
+        id: events_colormap
+        task: apply_color_map
+        partial:
+          input_column_name: "event_type"
+          colormap: "tab20b"
+          output_column_name: "event_type_colormap"
+          df: ${{ workflow.convert_event_details_timezone.return }}
 
       - name: Filter Event Relocations
         id: filter_events
         task: apply_reloc_coord_filter
         partial:
-          df: ${{ workflow.convert_event_details_timezone.return }}
+          df: ${{ workflow.events_colormap.return }}
           roi_gdf: null
           roi_name: null
           reset_index: true
@@ -219,7 +200,7 @@ workflow:
         partial:
           df: ${{ workflow.filter_events.return }}
           rename_columns:
-            time: event_datetime
+            time: event_time
             id: event_id
           retain_columns: []
           raise_if_not_found: false
@@ -239,7 +220,7 @@ workflow:
         task: add_temporal_index
         partial:
           df: ${{ workflow.sql_query.return }}
-          time_col: "event_datetime"
+          time_col: "event_time"
           groupers: ${{ workflow.groupers.return }}
           cast_to_datetime: true
           format: "mixed"
@@ -264,11 +245,199 @@ workflow:
       conditions:
         - never
 
+  - title: Download Attachments
+    type: task-group
+    description: Download attachments associated with the events.
+    tasks:
+      - name: Skip Attachment Download
+        id: skip_attachment_download
+        task: maybe_skip_df
+        partial:
+          df: ${{ workflow.get_event_data.return }}
+
+      - name: Download Attachments
+        id: download_attachments
+        task: download_event_attachments
+        partial:
+          client: ${{ workflow.er_client_name.return }}
+          output_dir: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+          use_index_as_id: false
+          event_gdf: ${{ workflow.skip_attachment_download.return }}
+          skip_download: false
+          attachments_subdir: "attachments"
+
+  - title: Generate Maps
+    type: task-group
+    description: Generate maps to visualise events. Skipped by default.
+    tasks:
+
+      - name: Skip Map Generation
+        id: skip_map_generation
+        task: maybe_skip_df
+        mapvalues:
+          argnames: df
+          argvalues: ${{ workflow.split_event_groups.return }}
+
+      - name: Drop duplicate columns
+        id: dedup_columns
+        task: drop_duplicate_columns
+        partial:
+          strategy: "drop_last"
+        mapvalues:
+          argnames: df
+          argvalues: ${{ workflow.skip_map_generation.return }}
+
+      - name: Rename columns for map tooltip display
+        id: rename_display_columns
+        task: map_columns
+        partial:
+          drop_columns: []
+          retain_columns: []
+          rename_columns:
+            serial_number: "Event Serial"
+            event_time: "Event Time"
+            event_type_display: "Event Type"
+            reported_by_name: "Reported By"
+          raise_if_not_found: false
+        mapvalues:
+          argnames: df
+          argvalues: ${{ workflow.dedup_columns.return }}
+
+      - name: Filter Points for Map Layer
+        id: filter_points_for_map
+        task: filter_by_geometry_type
+        partial:
+          geometry_types: ["Point"]
+        mapvalues:
+          argnames: df
+          argvalues: ${{ workflow.rename_display_columns.return }}
+
+      - name: Filter Polygons for Map Layer
+        id: filter_polygons_for_map
+        task: filter_by_geometry_type
+        partial:
+          geometry_types: ["Polygon", "MultiPolygon"]
+        mapvalues:
+          argnames: df
+          argvalues: ${{ workflow.rename_display_columns.return }}
+
+      - name: Set Events Map Title
+        id: set_events_map_title
+        task: set_string_var
+        partial:
+          var: "Events Map"
+
+      - name: " "
+        id: base_map_defs
+        task: set_base_maps
+
+      - name: Create map layer from grouped Events
+        id: grouped_events_map_layer
+        task: create_point_layer
+        skipif:
+          conditions:
+            - any_is_empty_df
+            - any_dependency_skipped
+            - all_geometry_are_none
+        partial:
+          layer_style:
+            fill_color_column: "event_type_colormap"
+            get_radius: 5
+          legend:
+            label_column: "Event Type"
+            color_column: "event_type_colormap"
+          tooltip_columns: ["Event Serial", "Event Time", "Event Type", "Reported By"]
+        mapvalues:
+          argnames: geodataframe
+          argvalues: ${{ workflow.filter_points_for_map.return }}
+
+      - name: Create polygon layer from grouped Events
+        id: grouped_events_polygon_layer
+        task: create_polygon_layer
+        skipif:
+          conditions:
+            - any_is_empty_df
+            - any_dependency_skipped
+            - all_geometry_are_none
+        partial:
+          layer_style:
+            fill_color_column: "event_type_colormap"
+            stroked: true
+            get_line_color: "white"
+            get_line_width: 2
+            opacity: 0.4
+          legend:
+            label_column: "Event Type"
+            color_column: "event_type_colormap"
+          tooltip_columns: ["Event Serial", "Event Time", "Event Type", "Reported By"]
+        mapvalues:
+          argnames: geodataframe
+          argvalues: ${{ workflow.filter_polygons_for_map.return }}
+
+      - name: Combine Point and Polygon layers per group
+        id: combined_event_map_layers
+        task: groupbykey
+        skipif:
+          conditions:
+            - all_keyed_iterables_are_skips
+          unpack_depth: 1
+        partial:
+          iterables:
+            - ${{ workflow.grouped_events_polygon_layer.return }}
+            - ${{ workflow.grouped_events_map_layer.return }}
+
+      - name: Draw Ecomap from grouped Events
+        id: grouped_events_ecomap
+        task: draw_ecomap
+        partial:
+          title: null
+          tile_layers: ${{ workflow.base_map_defs.return }}
+          north_arrow_style:
+            placement: "top-left"
+          legend_style:
+            title: "Event Type"
+            format_title: false
+            placement: "bottom-right"
+          static: false
+          max_zoom: 20
+          widget_id: ${{ workflow.set_events_map_title.return }}
+        mapvalues:
+          argnames: geo_layers
+          argvalues: ${{ workflow.combined_event_map_layers.return }}
+
+      - name: Persist grouped Events Ecomap as Text
+        id: grouped_events_ecomap_html_url
+        task: persist_text
+        partial:
+          root_path: ${{ env.ECOSCOPE_WORKFLOWS_RESULTS }}
+        mapvalues:
+          argnames: text
+          argvalues: ${{ workflow.grouped_events_ecomap.return }}
+
+      - name: Create grouped Events Map Widget
+        id: grouped_events_map_widget
+        task: create_map_widget_single_view
+        skipif:
+          conditions:
+            - never
+        partial:
+          title: ${{ workflow.set_events_map_title.return }}
+        map:
+          argnames: [view, data]
+          argvalues: ${{ workflow.grouped_events_ecomap_html_url.return }}
+
+      - name: Merge Events Map Widget Views
+        id: grouped_events_map_widget_merge
+        task: merge_widget_views
+        partial:
+          widgets: ${{ workflow.grouped_events_map_widget.return }}
+
   - name: Create Dashboard
     id: events_dashboard
     task: gather_dashboard
     partial:
       details: ${{ workflow.workflow_details.return }}
-      widgets: []
+      widgets:
+        - ${{ workflow.grouped_events_map_widget_merge.return }}
       groupers: ${{ workflow.groupers.return }}
       time_range: ${{ workflow.time_range.return }}
