@@ -7,9 +7,6 @@ platforms = ['linux-64', 'osx-arm64', 'win-64']
 published = false
 
 [dependencies]
-# Required to compile spec.yaml into the runnable workflow package
-wt-compiler = ">=0.5.2, <0.6.0"
+wt-compiler = ">=0.7.0"
 graphviz = "*"
-
-# Required for testing
 go-yq = "*"
