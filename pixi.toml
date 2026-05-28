@@ -1,0 +1,15 @@
+[workspace]
+name = "gcf-event-download"
+channels = ['https://repo.prefix.dev/ecoscope-workflows/', 'conda-forge']
+platforms = ['linux-64', 'osx-arm64', 'win-64']
+
+[tool.wt]
+published = false
+
+[dependencies]
+# Required to compile spec.yaml into the runnable workflow package
+wt-compiler = ">=0.5.2, <0.6.0"
+graphviz = "*"
+
+# Required for testing
+go-yq = "*"
