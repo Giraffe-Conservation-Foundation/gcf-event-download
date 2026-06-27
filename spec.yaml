@@ -1,11 +1,14 @@
 id: gcf_event_download
 requirements:
   - name: ecoscope-platform
-    version: ">=2.11.14, <2.12.0"
+    version: ">=2.16.0, <2.17.0"
     channel: https://repo.prefix.dev/ecoscope-workflows/
   - name: ecoscope-workflows-ext-custom
-    version: "0.1.0rc6"
+    version: "0.1.0rc14"
     channel: https://repo.prefix.dev/ecoscope-workflows-custom/
+  - name: ecoscope-workflows-ext-gcf
+    version: "0.1.0"
+    channel: https://repo.prefix.dev/ecoscope-workflows-gcf/
 
 rjsf-overrides:
   properties:
@@ -176,6 +179,12 @@ workflow:
           columns: []
           auto_detect: true
 
+      - name: Flatten GCF Repeat Groups
+        id: flatten_repeat_groups
+        task: flatten_gcf_repeat_groups
+        partial:
+          df: ${{ workflow.convert_event_details_timezone.return }}
+
       - name: Events Colormap
         id: events_colormap
         task: apply_color_map
@@ -183,7 +192,7 @@ workflow:
           input_column_name: "event_type"
           colormap: "tab20b"
           output_column_name: "event_type_colormap"
-          df: ${{ workflow.convert_event_details_timezone.return }}
+          df: ${{ workflow.flatten_repeat_groups.return }}
 
       - name: Filter Event Relocations
         id: filter_events

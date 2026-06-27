@@ -15,58 +15,65 @@ EarthRanger API returns these as a mixed parent/child row structure:
 Additionally, some repeat-group fields arrive as a list of dicts inside a
 single cell (e.g. detail_Herd = [{"age": "adult", "sex": "female"}, …]).
 
-This module provides flatten_gcf_repeat_groups(), which:
+This module provides flatten_gcf_repeat_groups(), registered as a wt task,
+which:
   1. Detects the orphan-child pattern and forward-fills event metadata from
      parent rows onto child rows, then drops the now-superseded parent rows.
   2. Detects list-of-dict columns (detail_* prefix) and explodes them into
      one row per repeat-group entry, normalising sub-fields into flat columns.
 
-USAGE IN spec.yaml
-------------------
-Once this function is packaged in an Ecoscope workflow extension
-(e.g. ecoscope-workflows-ext-gcf), add the task to the workflow:
+PACKAGING
+---------
+This function lives in the ecoscope-workflows-ext-gcf package
+(https://github.com/Giraffe-Conservation-Foundation/ecoscope-workflows-ext-gcf),
+which any GCF module's spec.yaml can pull straight from GitHub as a PyPI-style
+git requirement — no conda channel or publishing step required:
 
-    - name: Flatten GCF Repeat Groups
-      id: flatten_repeat_groups
-      task: flatten_gcf_repeat_groups
-      partial:
-        df: ${{ workflow.convert_event_details_timezone.return }}
+    requirements:
+      - name: ecoscope-workflows-ext-gcf
+        git: https://github.com/Giraffe-Conservation-Foundation/ecoscope-workflows-ext-gcf.git
+        tag: v0.1.0
+
+    workflow:
+      - name: Flatten GCF Repeat Groups
+        id: flatten_repeat_groups
+        task: flatten_gcf_repeat_groups
+        partial:
+          df: ${{ workflow.convert_event_details_timezone.return }}
 
 The compiled workflow will call flatten_gcf_repeat_groups(df=...) and pass
 the result to the next task.
-
-PACKAGING NOTES (for wildlife-dynamics / Ecoscope team)
---------------------------------------------------------
-To register this as a workflow task:
-  1. Create an extension package (e.g. ecoscope-workflows-ext-gcf) following
-     the pattern of ecoscope-workflows-ext-custom.
-  2. Decorate flatten_gcf_repeat_groups with the appropriate task decorator
-     (e.g. @distributed or @task depending on the framework version).
-  3. Publish the conda package to the prefix.dev custom channel.
-  4. Add the requirement to spec.yaml and uncomment the task block.
 """
+
+from typing import Annotated
 
 import geopandas as gpd
 import pandas as pd
+from ecoscope.platform.annotations import AnyGeoDataFrame
+from pydantic import Field
+from wt_registry import register
 
 
-def flatten_gcf_repeat_groups(df: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+@register()
+def flatten_gcf_repeat_groups(
+    df: Annotated[
+        AnyGeoDataFrame,
+        Field(
+            description=(
+                "Events GeoDataFrame after normalize_json_column and "
+                "drop_column_prefix steps. Expects columns produced by the "
+                "standard Ecoscope processing chain: event_datetime, event_id, "
+                "serial_number, event_type, etc."
+            ),
+            exclude=True,
+        ),
+    ],
+) -> Annotated[AnyGeoDataFrame, Field()]:
     """
     Forward-fill parent event metadata onto orphan child rows from repeat
     groups, drop superseded parent rows, and explode list-of-dict columns.
 
-    Parameters
-    ----------
-    df : GeoDataFrame
-        Events dataframe after normalize_json_column and drop_column_prefix
-        steps. Expects columns produced by the standard Ecoscope processing
-        chain: event_datetime, event_id, serial_number, event_type, etc.
-
-    Returns
-    -------
-    GeoDataFrame
-        Flattened dataframe with one row per repeat-group entry. Events that
-        have no repeat groups pass through unchanged.
+    Events that have no repeat groups pass through unchanged.
     """
 
     # ── 1. Repair repeat-group "orphan" child rows ────────────────────────────
