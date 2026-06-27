@@ -26,7 +26,7 @@ rjsf-overrides:
     Download Attachments.properties.skip_attachment_download.properties.skip.default: true
 
     persist_events.properties.filename_prefix.default: "events"
-    persist_events.properties.filetypes.default: ["csv"]
+    persist_events.properties.filetypes.default: ["parquet"]
     persist_events.properties.filetypes.items.enum: ["csv", "parquet"]
     persist_events.properties.filetypes.description: >-
       Output file format. CSV opens in Excel. Parquet preserves geometry and
