@@ -29,7 +29,7 @@ version = "==0.1.0rc14"
 channel = "https://repo.prefix.dev/ecoscope-workflows-custom/"
 
 [dependencies.ecoscope-workflows-ext-gcf]
-version = "==0.1.0"
+version = "==0.1.1"
 channel = "https://repo.prefix.dev/ecoscope-workflows-gcf/"
 
 [dependencies.click]
