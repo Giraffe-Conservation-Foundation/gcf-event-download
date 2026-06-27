@@ -248,7 +248,7 @@
       "properties": {
         "filetypes": {
           "default": [
-            "csv"
+            "parquet"
           ],
           "items": {
             "enum": [
