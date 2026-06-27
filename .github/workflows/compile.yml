@@ -33,7 +33,8 @@ jobs:
             --spec spec.yaml \
             --pkg-name-prefix=ecoscope-workflows \
             --results-env-var=ECOSCOPE_WORKFLOWS_RESULTS \
-            --no-progress --clobber
+            --no-progress --clobber \
+            --env-overrides wt-compiler-env-overrides.toml
 
       - name: Commit compiled output
         run: |
