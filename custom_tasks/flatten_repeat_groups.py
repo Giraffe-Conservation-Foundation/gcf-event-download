@@ -13,26 +13,27 @@ EarthRanger API returns these as a mixed parent/child row structure:
   …
 
 Additionally, some repeat-group fields arrive as a list of dicts inside a
-single cell (e.g. detail_Herd = [{"age": "adult", "sex": "female"}, …]).
+single cell (e.g. Individuals = [{"Age": "ad", "Sex": "m"}, …]). These may
+be Python list objects or JSON strings depending on how the EarthRanger API
+serialised them.
 
-This module provides flatten_gcf_repeat_groups(), registered as a wt task,
-which:
+flatten_gcf_repeat_groups(), registered as a wt task via @register():
   1. Detects the orphan-child pattern and forward-fills event metadata from
      parent rows onto child rows, then drops the now-superseded parent rows.
-  2. Detects list-of-dict columns (detail_* prefix) and explodes them into
-     one row per repeat-group entry, normalising sub-fields into flat columns.
+  2. Detects any column containing list-of-dict data (including JSON strings)
+     and explodes each into one row per repeat-group entry, normalising
+     sub-fields into flat columns prefixed with the original column name.
 
-PACKAGING
----------
-This function lives in the ecoscope-workflows-ext-gcf package
-(https://github.com/Giraffe-Conservation-Foundation/ecoscope-workflows-ext-gcf),
-which any GCF module's spec.yaml can pull straight from GitHub as a PyPI-style
-git requirement — no conda channel or publishing step required:
+Field names of repeat groups vary by EarthRanger instance/event form
+customization, so the detection logic is schema-agnostic — it discovers
+list-of-dict columns at runtime rather than requiring a fixed set of names.
 
+USAGE IN spec.yaml
+-------------------
     requirements:
       - name: ecoscope-workflows-ext-gcf
-        git: https://github.com/Giraffe-Conservation-Foundation/ecoscope-workflows-ext-gcf.git
-        tag: v0.1.0
+        version: "0.1.1"
+        channel: https://repo.prefix.dev/ecoscope-workflows-gcf/
 
     workflow:
       - name: Flatten GCF Repeat Groups
@@ -40,11 +41,9 @@ git requirement — no conda channel or publishing step required:
         task: flatten_gcf_repeat_groups
         partial:
           df: ${{ workflow.convert_event_details_timezone.return }}
-
-The compiled workflow will call flatten_gcf_repeat_groups(df=...) and pass
-the result to the next task.
 """
 
+import json
 from typing import Annotated
 
 import geopandas as gpd
@@ -52,6 +51,25 @@ import pandas as pd
 from ecoscope.platform.annotations import AnyGeoDataFrame
 from pydantic import Field
 from wt_registry import register
+
+
+def _to_list_of_dicts(x) -> list[dict] | None:
+    """Return x as a list-of-dicts if possible, else None.
+
+    Handles both native Python lists and JSON-string representations.
+    """
+    if isinstance(x, list):
+        if len(x) > 0 and isinstance(x[0], dict):
+            return x
+        return None
+    if isinstance(x, str):
+        try:
+            parsed = json.loads(x)
+            if isinstance(parsed, list) and len(parsed) > 0 and isinstance(parsed[0], dict):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return None
 
 
 @register()
@@ -121,25 +139,21 @@ def flatten_gcf_repeat_groups(
                 crs=4326,
             )
 
-    # ── 2. Explode list-of-dict columns (e.g. detail_Herd) ───────────────────
-    # These are repeat-group fields where the API returns a list of dicts
-    # (one dict per sub-observation). We explode each such column so that
-    # every sub-observation becomes its own row, then normalise the dict
-    # keys into flat columns.
+    # ── 2. Explode list-of-dict columns ──────────────────────────────────────
+    # Detect any column whose cells contain list-of-dicts (either as Python
+    # lists or as JSON strings). EarthRanger repeat-group fields such as
+    # "Individuals" arrive this way after the normalize/prefix-drop steps.
     list_dict_cols = [
         col
         for col in df.columns
-        if col.startswith("detail_")
-        and df[col]
-        .apply(lambda x: isinstance(x, list) and len(x) > 0 and isinstance(x[0], dict))
-        .any()
+        if df[col].apply(lambda x: _to_list_of_dicts(x) is not None).any()
     ]
 
     for col in list_dict_cols:
-        # Ensure every cell has at least one entry so explode preserves rows
-        # for events that don't have data in this repeat group.
+        # Parse JSON strings → Python lists; use [{}] as placeholder for rows
+        # that have no data in this repeat group so explode preserves them.
         df[col] = df[col].apply(
-            lambda x: x if (isinstance(x, list) and len(x) > 0) else [{}]
+            lambda x: _to_list_of_dicts(x) or [{}]
         )
         df = df.explode(col, ignore_index=True)
 
@@ -148,7 +162,6 @@ def flatten_gcf_repeat_groups(
         nested = pd.json_normalize(
             df[col].apply(lambda x: x if isinstance(x, dict) else {})
         )
-        # Prefix nested columns to avoid name collisions
         nested.columns = [f"{col}_{c}" for c in nested.columns]
 
         df = gpd.GeoDataFrame(
